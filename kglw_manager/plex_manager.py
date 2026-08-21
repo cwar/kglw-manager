@@ -327,6 +327,19 @@ class PlexManager:
             logger.warning(f"Could not set release date on {plex_item.title}: {e}")
             return False
 
+    def _local_poster_for_item(self, plex_item) -> Optional[Path]:
+        """Find the normalized poster.jpg sitting next to a Plex item's media."""
+        try:
+            for part in plex_item.iterParts():
+                if not part.file:
+                    continue
+                local = Path(self._convert_from_plex_path(part.file)).parent / 'poster.jpg'
+                if local.exists():
+                    return local
+        except Exception as e:
+            logger.debug(f"Could not locate local poster for {plex_item.title}: {e}")
+        return None
+
     def _get_show_info_from_api(self, date_str: str) -> Optional[Dict]:
         """Get show information from KGLW.net API."""
         try:
@@ -1004,8 +1017,19 @@ class PlexManager:
                             except Exception as unlock_err:
                                 logger.debug(f"Poster already unlocked or unlock not needed: {unlock_err}")
 
-                            # Upload new poster
-                            item.uploadPoster(url=poster_url)
+                            # Prefer the locally normalized poster: the raw
+                            # kglw.net image is rarely 2:3, so uploading the URL
+                            # directly lets Plex crop the artwork.
+                            local_poster = self._local_poster_for_item(item)
+                            if local_poster:
+                                item.uploadPoster(filepath=str(local_poster))
+                            else:
+                                item.uploadPoster(url=poster_url)
+                            # Lock it, otherwise Plex keeps its own selection
+                            try:
+                                item.lockPoster()
+                            except Exception:
+                                pass
                             logger.info(f"🎨 Updated poster for: {item.title}")
                             results['posters_updated'] += 1
                         except Exception as poster_err:
