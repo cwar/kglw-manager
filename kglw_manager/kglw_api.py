@@ -10,6 +10,7 @@ Provides functionality to:
 import logging
 import re
 import requests
+import struct
 import time
 from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path
@@ -229,6 +230,17 @@ class KGLWApi:
                 poster_url = upload.get('URL')
                 break
 
+        # uploads.json only knows about file uploads. Posters attached by URL
+        # appear solely in the setlist page markup, and square art filed as
+        # poster-art is usually release artwork rather than a show poster - in
+        # both cases the page is the better source.
+        if not poster_url or self._looks_square(poster_url):
+            for candidate in self.get_poster_urls_from_setlist_page(date):
+                if candidate != poster_url:
+                    logger.info(f"Using poster from setlist page for {date}")
+                    poster_url = candidate
+                    break
+
         # Cache the result (even if None, to avoid repeated API calls)
         try:
             with open(cache_file, 'w', encoding='utf-8') as f:
@@ -238,6 +250,79 @@ class KGLWApi:
             logger.warning(f"Failed to cache poster URL for {date}: {e}")
 
         return poster_url
+
+    # Posters added to a show by URL are rendered into the setlist page but are
+    # never written to uploads.json, so the API alone misses them.
+    POSTER_IMG_RE = re.compile(
+        r'<img[^>]+src="([^"]+)"[^>]*class="[^"]*poster-image', re.I)
+
+    def _looks_square(self, url: str) -> bool:
+        """True if the image at `url` is roughly square.
+
+        Release artwork is square; show posters are portrait. Square images
+        filed as poster-art are usually album covers attached to the wrong
+        slot, so they should not be trusted as a show's poster. Only the
+        header bytes are fetched.
+        """
+        try:
+            response = requests.get(
+                url, headers={'User-Agent': self.user_agent,
+                              'Range': 'bytes=0-65535'},
+                timeout=self.timeout)
+            data = response.content
+        except Exception as e:
+            logger.debug(f"Could not probe {url}: {e}")
+            return False
+
+        width = height = 0
+        if data[:8] == b'\x89PNG\r\n\x1a\n' and len(data) > 24:
+            width, height = struct.unpack('>II', data[16:24])
+        elif data[:2] == b'\xff\xd8':
+            i = 2
+            while i < len(data) - 9:
+                if data[i] != 0xFF:
+                    i += 1
+                    continue
+                marker = data[i + 1]
+                if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6,
+                              0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+                    height, width = struct.unpack('>HH', data[i + 5:i + 9])
+                    break
+                if marker in (0xD8, 0xD9) or 0xD0 <= marker <= 0xD7:
+                    i += 2
+                    continue
+                i += 2 + struct.unpack('>H', data[i + 2:i + 4])[0]
+
+        if not width or not height:
+            return False
+        square = abs(width / height - 1.0) < 0.02
+        if square:
+            logger.debug(f"{url} is {width}x{height} (square) - likely release art")
+        return square
+
+    def get_poster_urls_from_setlist_page(self, date: str) -> List[str]:
+        """Scrape the poster images the setlist page actually displays.
+
+        Returns them in page order; URL-added posters come first, which is also
+        the order the site shows them in.
+        """
+        show = self.get_show_by_date(date)
+        permalink = (show or {}).get('permalink')
+        if not permalink:
+            return []
+        url = f"https://kglw.net/setlists/{permalink}"
+        try:
+            response = requests.get(
+                url, headers={'User-Agent': self.user_agent}, timeout=self.timeout)
+            if response.status_code != 200:
+                logger.debug(f"Setlist page {url} returned {response.status_code}")
+                return []
+            found = self.POSTER_IMG_RE.findall(response.text)
+            logger.debug(f"{len(found)} poster image(s) on the setlist page for {date}")
+            return found
+        except Exception as e:
+            logger.debug(f"Could not read setlist page for {date}: {e}")
+            return []
 
     def get_show_by_date(self, date: str, force_refresh: bool = False) -> Optional[Dict]:
         """Get show data for a specific date (YYYY-MM-DD format)."""
