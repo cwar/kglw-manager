@@ -264,12 +264,14 @@ class PlexManager:
                     if show_info.get('setlist_notes'):
                         plex_item.editSummary(show_info['setlist_notes'])
                         logger.debug(f"Updated summary for: {plex_item.title}")
-                    
-                    # Update other metadata fields as available
-                    # Note: Some fields might not be available in all Plex versions
-                    
+
+                    # Pin the release date to the actual show date. Plex
+                    # otherwise guesses a year from the file, which sorts
+                    # concerts under the year they were downloaded.
+                    self._set_show_date(plex_item, date_part)
+
                     return True
-                    
+
                 except Exception as e:
                     # Fallback to deprecated edit method if newer methods fail
                     logger.warning(f"New edit methods failed, trying deprecated edit: {e}")
@@ -291,6 +293,40 @@ class PlexManager:
             logger.error(f"❌ Error updating metadata: {e}")
             return False
     
+    @staticmethod
+    def _set_show_date(plex_item, date_str: str) -> bool:
+        """Pin a Plex item's release date/year to the concert date.
+
+        The show date is authoritative - it comes from the directory name and
+        the kglw.net API - whereas Plex infers a year from the media file, which
+        is frequently the year it was downloaded rather than performed. Both
+        fields are locked so a later Plex refresh cannot overwrite them.
+        """
+        import re as _re
+        match = _re.match(r'(\d{4})-(\d{2})-(\d{2})', (date_str or '').strip())
+        if not match:
+            return False
+
+        show_date = match.group(0)
+        year = int(match.group(1))
+        if getattr(plex_item, 'year', None) == year:
+            existing = getattr(plex_item, 'originallyAvailableAt', None)
+            if existing is not None and existing.strftime('%Y-%m-%d') == show_date:
+                return False  # already correct
+
+        try:
+            plex_item.edit(**{
+                'originallyAvailableAt.value': show_date,
+                'originallyAvailableAt.locked': 1,
+                'year.value': year,
+                'year.locked': 1,
+            })
+            logger.debug(f"Set release date {show_date} on {plex_item.title}")
+            return True
+        except Exception as e:
+            logger.warning(f"Could not set release date on {plex_item.title}: {e}")
+            return False
+
     def _get_show_info_from_api(self, date_str: str) -> Optional[Dict]:
         """Get show information from KGLW.net API."""
         try:

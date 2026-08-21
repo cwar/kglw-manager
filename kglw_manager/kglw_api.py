@@ -585,10 +585,83 @@ class KGLWApi:
             with open(poster_path, "wb") as f:
                 f.write(response.content)
 
+            # kglw.net art is gig posters and photos of varying shape; Plex's
+            # movie poster slot is 2:3 and crops anything wider, so fit it.
+            normalized = normalize_poster(poster_path)
+            if normalized and normalized != poster_path:
+                poster_path.unlink(missing_ok=True)
+                poster_path = normalized
+
             logger.info(f"✅ Downloaded poster: {poster_path}")
             return poster_path
 
         except Exception as e:
             logger.error(f"❌ Error downloading poster from API: {e}")
 
+        return None
+
+
+# --- poster shape helpers -------------------------------------------------
+
+POSTER_WIDTH = 1000
+POSTER_HEIGHT = 1500  # 2:3, the ratio Plex renders movie posters at
+
+
+def normalize_poster(image_path: Path) -> Optional[Path]:
+    """Fit an image into Plex's 2:3 poster slot without cropping it.
+
+    Gig posters are commonly ~3:4 and photos are landscape; Plex crops both to
+    reach 2:3, cutting the sides off the artwork. Instead the image is scaled to
+    fit entirely inside the frame and the remaining band is filled with a
+    blurred, slightly darkened copy of itself.
+
+    Returns the path to the normalized JPEG, or None if it could not be
+    produced (the original is then left untouched).
+    """
+    import subprocess
+
+    try:
+        probe = subprocess.run(
+            ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+             '-show_entries', 'stream=width,height', '-of', 'csv=p=0',
+             str(image_path)],
+            capture_output=True, text=True, timeout=30)
+        width, height = (int(v) for v in probe.stdout.strip().split(',')[:2])
+    except Exception as e:
+        logger.debug(f"Could not read poster dimensions for {image_path}: {e}")
+        return None
+
+    if not width or not height:
+        return None
+
+    target = image_path.with_name('poster.jpg')
+    if (abs(width / height - POSTER_WIDTH / POSTER_HEIGHT) < 0.005
+            and image_path == target):
+        return image_path  # already the right shape
+
+    scale_fill = (f"scale={POSTER_WIDTH}:{POSTER_HEIGHT}"
+                  ":force_original_aspect_ratio=increase")
+    scale_fit = (f"scale={POSTER_WIDTH}:{POSTER_HEIGHT}"
+                 ":force_original_aspect_ratio=decrease")
+    filters = (
+        f"[0:v]{scale_fill},crop={POSTER_WIDTH}:{POSTER_HEIGHT},"
+        f"boxblur=luma_radius=40:luma_power=2,eq=brightness=-0.15[bg];"
+        f"[0:v]{scale_fit}[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2"
+    )
+
+    tmp = image_path.with_name('.poster_normalized.jpg')
+    try:
+        result = subprocess.run(
+            ['ffmpeg', '-nostdin', '-v', 'error', '-y', '-i', str(image_path),
+             '-filter_complex', filters, '-frames:v', '1', '-q:v', '2', str(tmp)],
+            capture_output=True, text=True, timeout=180)
+        if result.returncode != 0 or not tmp.exists() or not tmp.stat().st_size:
+            tmp.unlink(missing_ok=True)
+            logger.debug(f"Poster normalization failed for {image_path}")
+            return None
+        tmp.replace(target)
+        return target
+    except Exception as e:
+        tmp.unlink(missing_ok=True)
+        logger.debug(f"Poster normalization error for {image_path}: {e}")
         return None
