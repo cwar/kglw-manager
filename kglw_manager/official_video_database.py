@@ -21,7 +21,7 @@ OFFICIAL_KGLW_VIDEOS = {
         "url": "https://www.youtube.com/watch?v=bzGYxfMIXc4",
         "title": "King Gizzard & The Lizard Wizard - Live in Austin '24",
         "channel": "King Gizzard And The Lizard Wizard",
-        "uploader_id": "UC4BR8d-GI5MQy8JMhKPdq8w",
+        "uploader_id": "UCNiyS8zr2RIddszLwtoyUow",
         "height": 2160,  # 4K
         "duration": 11320,  # ~3 hours 8 minutes
         "upload_date": "2024-11-16",
@@ -37,7 +37,7 @@ OFFICIAL_KGLW_VIDEOS = {
         "url": "https://www.youtube.com/watch?v=example2024",
         "title": "King Gizzard & The Lizard Wizard - Live in Berkeley '24",
         "channel": "King Gizzard And The Lizard Wizard", 
-        "uploader_id": "UC4BR8d-GI5MQy8JMhKPdq8w",
+        "uploader_id": "UCNiyS8zr2RIddszLwtoyUow",
         "height": 1080,
         "duration": 7200,
         "upload_date": "2024-10-20",
@@ -225,10 +225,12 @@ class OfficialVideoDatabase:
         """Learn from a successful YouTube search result."""
         # Only learn from official/trusted sources
         uploader_id = video_result.get('uploader_id', '')
+        channel_id = candidate.get('channel_id') or ''
         channel = video_result.get('channel', '').lower()
         
         is_official = (
-            uploader_id == "UC4BR8d-GI5MQy8JMhKPdq8w" or 
+            uploader_id == "UCNiyS8zr2RIddszLwtoyUow" or
+            channel_id == "UCNiyS8zr2RIddszLwtoyUow" or 
             uploader_id == "@KingGizzardAndTheLizardWizard" or
             "@Dempsee" in uploader_id or 
             "dempsee" in channel
@@ -257,7 +259,12 @@ class OfficialVideoDatabase:
             'quality_label': video_result.get('quality_label', ''),
             'format_id': video_result.get('format_id', ''),
             'learned_date': datetime.now().isoformat(),
-            'priority_score': 2000 if "UC4BR8d-GI5MQy8JMhKPdq8w" in uploader_id else 1500
+            'priority_score': 2000 if ("UCNiyS8zr2RIddszLwtoyUow" in (uploader_id or '') or
+                                        "UCNiyS8zr2RIddszLwtoyUow" in (channel_id or '') or
+                                        'kinggizzard' in (uploader_id or '').lower())
+                               else (1500 if ("UCcuH2tZMk_-wDmA5YHsCcIg" in (channel_id or '') or
+                                              'dempse' in (uploader_id or '').lower())
+                                     else 1000)
         }
         
         # Store in learned videos

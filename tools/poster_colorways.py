@@ -11,10 +11,39 @@ W, H = 1000, 1500
 TOUR_FILTER = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith('--') else None
 APPLY = "--apply" in sys.argv
 
+def mean_saturation(src) -> float:
+    """Rough mean saturation of an image (0 = greyscale)."""
+    try:
+        r = subprocess.run(['ffmpeg','-nostdin','-v','error','-i',str(src),
+            '-vf','scale=60:90','-f','rawvideo','-pix_fmt','rgb24','-'],
+            capture_output=True, timeout=60)
+        d = r.stdout
+        if not d:
+            return 1.0
+        total = 0.0
+        count = 0
+        for i in range(0, len(d) - 2, 3):
+            mx = max(d[i], d[i+1], d[i+2]); mn = min(d[i], d[i+1], d[i+2])
+            total += 0.0 if mx == 0 else (mx - mn) / mx
+            count += 1
+        return total / count if count else 1.0
+    except Exception:
+        return 1.0
+
+
 def render(src, dst, hue, sat):
-    """Normalize to 2:3 and rotate hue. Night one keeps the original colors."""
-    hue_fg = f",hue=h={hue}:s={sat}" if hue else ""
-    hue_bg = f",hue=h={hue}:s={sat}" if hue else ""
+    """Normalize to 2:3 and recolor. Night one keeps the original colors.
+
+    Hue rotation does nothing to greyscale artwork (several KGLW tour posters
+    are pure black and white), so those are tinted with colorize instead,
+    producing a duotone rather than an identical copy.
+    """
+    if hue and mean_saturation(src) < 0.05:
+        tint = f",colorize=hue={hue}:saturation=0.55:mix=0.85"
+        hue_fg = hue_bg = tint
+    else:
+        hue_fg = f",hue=h={hue}:s={sat}" if hue else ""
+        hue_bg = f",hue=h={hue}:s={sat}" if hue else ""
     vf = (f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
           f"boxblur=luma_radius=40:luma_power=2,eq=brightness=-0.15{hue_bg}[bg];"
           f"[0:v]scale={W}:{H}:force_original_aspect_ratio=decrease{hue_fg}[fg];"

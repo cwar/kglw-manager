@@ -16,13 +16,20 @@ logger = setup_logging()
 class YouTubeSearcher:
     """Handle YouTube searching and quality analysis for upgrades."""
     
-    # Official and trusted channels (in priority order)
-    OFFICIAL_CHANNEL_ID = "UC4BR8d-GI5MQy8JMhKPdq8w"  # King Gizzard & The Lizard Wizard
-    OFFICIAL_HANDLES = ("@kinggizzard", "@kinggizzardandthelizardwizard")
-    PRIORITY_CHANNELS = [
-        OFFICIAL_CHANNEL_ID,
-        "@Dempsee",  # Dempsee - known for high quality livestream captures
-    ]
+    # Official and trusted channels, in preference order.
+    # Verified against live yt-dlp metadata - the previously hardcoded
+    # "UC4BR8d-GI5MQy8JMhKPdq8w" is not the band's channel, so the official
+    # bonus only ever fired via the @handle fallback.
+    OFFICIAL_CHANNEL_ID = "UCNiyS8zr2RIddszLwtoyUow"
+    OFFICIAL_HANDLES = ("@kinggizzardandthelizardwizard", "@kinggizzard")
+
+    # Chris Dempsey - high quality full-show captures. The display name is
+    # "Chris Dempsey" (with a y) while the handle is @Dempsee, so matching on
+    # the channel name alone misses it.
+    DEMPSEE_CHANNEL_ID = "UCcuH2tZMk_-wDmA5YHsCcIg"
+    DEMPSEE_HANDLES = ("@dempsee",)
+
+    PRIORITY_CHANNELS = [OFFICIAL_CHANNEL_ID, DEMPSEE_CHANNEL_ID]
 
     def _is_official_kglw(self, video: Dict) -> bool:
         """True if the video is from the official KGLW channel.
@@ -38,11 +45,27 @@ class YouTubeSearcher:
 
     def _is_dempsee(self, video: Dict) -> bool:
         """True if the video is from the trusted Dempsee channel."""
+        channel_id = video.get('channel_id') or ''
         uploader_id = (video.get('uploader_id') or '').lower()
         channel = (video.get('channel') or '').lower()
         uploader = (video.get('uploader') or '').lower()
-        return uploader_id == '@dempsee' or 'dempsee' in channel or 'dempsee' in uploader
+        return (channel_id == self.DEMPSEE_CHANNEL_ID
+                or uploader_id in self.DEMPSEE_HANDLES
+                or 'dempsee' in channel or 'dempsey' in channel
+                or 'dempsee' in uploader or 'dempsey' in uploader)
     
+    def source_tier(self, video: Dict) -> int:
+        """Preference order for where a recording came from.
+
+        0 = official King Gizzard channel, 1 = Dempsee, 2 = everything else.
+        Lower is better; callers sort on this before quality.
+        """
+        if self._is_official_kglw(video):
+            return 0
+        if self._is_dempsee(video):
+            return 1
+        return 2
+
     # Minimum quality thresholds
     MIN_HEIGHT = 720   # Minimum 720p
     PREFER_HEIGHT = 1080  # Prefer 1080p+
@@ -818,10 +841,11 @@ class YouTubeSearcher:
         # Channel priority (most important)
         channel = (video.get('channel') or '').lower()
 
-        if self._is_official_kglw(video):
-            score += 2000  # Highest priority for official channel
-        elif self._is_dempsee(video):
-            score += 1500  # High priority for Dempsee
+        tier = self.source_tier(video)
+        if tier == 0:
+            score += 2000  # Official King Gizzard channel
+        elif tier == 1:
+            score += 1500  # Dempsee
         elif 'king gizzard' in channel or 'kglw' in channel:
             score += 1000  # Other official-seeming channels
 

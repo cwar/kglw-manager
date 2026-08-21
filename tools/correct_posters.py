@@ -33,6 +33,12 @@ for tour in sorted(p for p in ROOT.iterdir() if p.is_dir() and not p.name.starts
 fixed = same = missing = failed = 0
 for tour_name, show in shows:
     date = show.name[:10]
+    if (show / '.poster_pinned').exists():
+        # Hand-chosen art: multi-night events often share one poster covering a
+        # date range, and kglw.net occasionally files an unrelated image as a
+        # show's poster-art. Never overwrite a pinned choice.
+        same += 1
+        continue
     url = posters.get(date)
     if not url:
         missing += 1
@@ -76,4 +82,4 @@ for tour_name, show in shows:
         time.sleep(1.0)
 
 print(("APPLIED" if APPLY else "DRY RUN") +
-      f": corrected={fixed} unchanged={same} no_art_on_kglw={missing} failed={failed}")
+      f": corrected={fixed} unchanged_or_pinned={same} no_art_on_kglw={missing} failed={failed}")
