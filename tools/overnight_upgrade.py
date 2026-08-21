@@ -26,6 +26,7 @@ DEADLINE      = datetime.now() + timedelta(hours=float(sys.argv[sys.argv.index("
                 if "--hours" in sys.argv else datetime.now() + timedelta(hours=7)
 MIN_FREE_GB   = 250          # leave headroom on the NAS
 MAX_DOWNLOADS = 120
+RESOLUTION_FLOOR = 720       # a better source may lower resolution, but not below this
 APPLY         = "--apply" in sys.argv
 SEARCHER = None  # lazily built; supplies the official/Dempsee ordering
 
@@ -53,6 +54,25 @@ def probe(url):
                 "title": "|".join(p[6:])[:70]}
     except Exception:
         return None
+
+def current_source_tier(show_dir):
+    """Source tier of the copy already held, read from its yt-dlp .info.json.
+
+    Without that sidecar the provenance is unknown, so it is treated as the
+    lowest tier - which lets a known-good source replace it.
+    """
+    for j in sorted(show_dir.glob('*.info.json')):
+        try:
+            meta = json.loads(j.read_text(encoding='utf-8', errors='replace'))
+        except Exception:
+            continue
+        return SEARCHER.source_tier({
+            'channel_id': meta.get('channel_id') or '',
+            'uploader_id': meta.get('uploader_id') or '',
+            'channel': meta.get('channel') or meta.get('uploader') or '',
+        })
+    return 2
+
 
 def current_best(show_dir):
     best = (0, 0.0, None)
@@ -128,6 +148,7 @@ for cand in candidates:
     done += 1
 
     cur_h, cur_d, cur_f = current_best(show_dir)
+    cur_tier = current_source_tier(show_dir)
     urls = []
     entry = sheet_data.get(date)
     if entry:
@@ -142,16 +163,31 @@ for cand in candidates:
         info = probe(u)
         if not info:
             continue
-        # strictly better: more pixels, and not materially shorter
-        if info['h'] > cur_h and info['dur'] >= max(cur_d * 0.9, 60):
-            # Source order first - official King Gizzard channel, then Dempsee,
-            # then anyone else - and only compare quality within a tier.
-            tier = SEARCHER.source_tier({'channel_id': info['cid'],
-                                         'uploader_id': info.get('uid', ''),
-                                         'channel': info['ch']})
-            key = (-tier, info['h'], info['dur'])
-            if not best or key > best[0]:
-                best = (key, info, u)
+        tier = SEARCHER.source_tier({'channel_id': info['cid'],
+                                     'uploader_id': info.get('uid', ''),
+                                     'channel': info['ch']})
+
+        # Never accept a materially shorter recording, whatever the source.
+        if info['dur'] < max(cur_d * 0.9, 60):
+            continue
+
+        if tier < cur_tier:
+            # A more trusted source wins outright, even at lower resolution -
+            # an official upload is preferred over a stranger's 4K rip. Guard
+            # only against a genuinely unwatchable drop.
+            if info['h'] < RESOLUTION_FLOOR and info['h'] < cur_h:
+                log(f"   skip {info['ch'][:20]}: better source but only {info['h']}p "
+                    f"(floor {RESOLUTION_FLOOR}p, holding {cur_h}p)")
+                continue
+        elif tier == cur_tier:
+            if info['h'] <= cur_h:
+                continue          # same source tier: needs more pixels
+        else:
+            continue              # never move to a less trusted source
+
+        key = (-tier, info['h'], info['dur'])
+        if not best or key > best[0]:
+            best = (key, info, u)
         time.sleep(1.0)
 
     if not best:
@@ -159,9 +195,11 @@ for cand in candidates:
         continue
 
     _, info, url = best
-    tier_name = {0: "OFFICIAL", 1: "Dempsee", 2: "other"}[-best[0][0]]
-    log(f"UPGRADE {date}: {cur_h}p/{cur_d/60:.0f}m -> {info['h']}p/{info['dur']/60:.0f}m "
-        f"[{tier_name}: {info['ch'][:22]}]")
+    names = {0: "OFFICIAL", 1: "Dempsee", 2: "other"}
+    tier_name = names[-best[0][0]]
+    why = "better source" if -best[0][0] < cur_tier else "higher resolution"
+    log(f"UPGRADE {date}: {cur_h}p/{cur_d/60:.0f}m [{names[cur_tier]}] -> "
+        f"{info['h']}p/{info['dur']/60:.0f}m [{tier_name}: {info['ch'][:20]}]  ({why})")
     if not APPLY:
         upgraded += 1
         continue
@@ -181,8 +219,13 @@ for cand in candidates:
         nd = float(parts[-1].split(',')[-1]) if parts else 0.0
     except Exception:
         nh, nd = 0, 0.0
-    if nh <= cur_h or nd < max(cur_d * 0.9, 60):
-        log(f"   rejected after download ({nh}p/{nd/60:.0f}m did not beat {cur_h}p/{cur_d/60:.0f}m)")
+    new_tier = -best[0][0]
+    accept = nd >= max(cur_d * 0.9, 60) and (
+        (new_tier < cur_tier and (nh >= RESOLUTION_FLOOR or nh >= cur_h))
+        or (new_tier == cur_tier and nh > cur_h))
+    if not accept:
+        log(f"   rejected after download ({nh}p/{nd/60:.0f}m vs held {cur_h}p/{cur_d/60:.0f}m, "
+            f"tier {new_tier} vs {cur_tier})")
         shutil.rmtree(tmp, ignore_errors=True)
         failed += 1
         continue
