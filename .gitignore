@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Local data / downloads
+*.part
+*.ytdl
+*.mp4
+*.webm
+*.log
+*.csv
+
+# Personal spreadsheet exports
+Sheet*.html
+*_export.html
