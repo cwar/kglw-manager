@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from plexapi.server import PlexServer
@@ -172,13 +173,30 @@ class PlexManager:
         return videos, posters
     
     def _determine_tour_from_path(self, show_path: Path) -> str:
-        """Determine tour name from directory structure."""
-        # Tour should be the parent directory name
-        tour_dir = show_path.parent
-        tour_name = tour_dir.name
-        
-        logger.debug(f"Determined tour: {tour_name}")
-        return tour_name
+        """Determine the canonical tour name for a show.
+
+        The directory name is the filesystem-safe form ("2024 USA-Canada -
+        Summer") because a path cannot contain "/", but kglw.net names the tour
+        "2024 USA/Canada - Summer". Creating a collection from the directory
+        name therefore produced a second collection for the same tour and split
+        its shows between the two. Resolve the API spelling from the show date
+        and fall back to the directory name only when the API has nothing.
+        """
+        tour_dir_name = show_path.parent.name
+
+        date_part = show_path.name[:10]
+        if re.match(r'\d{4}-\d{2}-\d{2}', date_part):
+            try:
+                show_info = self.kglw_api.get_show_by_date(date_part)
+                api_tour = (show_info or {}).get('tourname')
+                if api_tour:
+                    logger.debug(f"Tour from API: {api_tour} (dir: {tour_dir_name})")
+                    return api_tour
+            except Exception as e:
+                logger.debug(f"Could not resolve tour from API for {date_part}: {e}")
+
+        logger.debug(f"Determined tour from directory: {tour_dir_name}")
+        return tour_dir_name
     
     def _get_plex_item_by_path(self, video_path: Path) -> Optional[any]:
         """Find Plex item by file path."""

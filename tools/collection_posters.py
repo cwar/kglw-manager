@@ -24,6 +24,7 @@ OUT = ROOT / ".trash" / "collection_posters"
 VID = {'.mp4','.mkv','.webm','.avi','.mov'}
 W, H = 1000, 1500
 APPLY = "--apply" in sys.argv
+ONLY = next((a for a in sys.argv[1:] if not a.startswith('--')), None)
 
 def esc(text):
     return text.replace('\\', '').replace(':', '\\:').replace("'", "")
@@ -89,6 +90,8 @@ by_norm = {norm(t): c for t, c in colls.items()}
 OUT.mkdir(parents=True, exist_ok=True)
 used_tour = used_hero = skipped = failed = 0
 for tour_dir in sorted(p for p in ROOT.iterdir() if p.is_dir() and not p.name.startswith('.')):
+    if ONLY and tour_dir.name != ONLY:
+        continue
     if not any(s.is_dir() and any(f.suffix.lower() in VID and not f.name.endswith('.part')
                for f in s.iterdir() if f.is_file()) for s in tour_dir.iterdir()):
         continue
