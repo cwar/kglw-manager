@@ -74,6 +74,42 @@ def current_source_tier(show_dir):
     return 2
 
 
+def leading_silence(path, limit=3600):
+    """Seconds of silence before audio actually starts.
+
+    Livestream captures are frequently published with a long silent lead-in -
+    one 190 minute upload of a 150 minute show began 40 minutes early. Ranking
+    on raw duration lets padding masquerade as a more complete recording, so
+    the padding has to be measured and discounted.
+    """
+    try:
+        r = subprocess.run(
+            # -vn matters: decoding the video stream as well makes this
+            # roughly an order of magnitude slower on a multi-GB file.
+            ['ffmpeg', '-nostdin', '-nostats', '-t', str(limit), '-i', str(path),
+             '-vn', '-af', 'silencedetect=noise=-40dB:d=20', '-f', 'null', '-'],
+            capture_output=True, text=True, timeout=900)
+        ends = re.findall(r'silence_end: ([0-9.]+)', r.stderr)
+        starts = re.findall(r'silence_start: ([0-9.]+)', r.stderr)
+        if not ends:
+            return 0.0
+        # only count silence that runs from the very beginning of the file
+        if not starts or float(starts[0]) > 2.0:
+            return 0.0
+        return float(ends[-1]) if float(ends[-1]) < limit else 0.0
+    except Exception as e:
+        log(f"   could not measure silence in {Path(path).name[:40]}: {e}")
+        return 0.0
+
+
+def effective_duration(path, raw_duration):
+    """Runtime with any silent lead-in discounted."""
+    pad = leading_silence(path)
+    if pad > 120:
+        log(f"   {Path(path).name[:38]}: {pad/60:.0f} min of leading silence discounted")
+    return max(raw_duration - pad, 0.0)
+
+
 def current_best(show_dir):
     best = (0, 0.0, None)
     for f in show_dir.iterdir():
@@ -89,7 +125,7 @@ def current_best(show_dir):
         except Exception:
             h, d = 0, 0.0
         if h > best[0]:
-            best = (h, d, f)
+            best = (h, effective_duration(f, d), f)
     return best
 
 def download(url, dest_dir, base):
@@ -219,6 +255,7 @@ for cand in candidates:
         nd = float(parts[-1].split(',')[-1]) if parts else 0.0
     except Exception:
         nh, nd = 0, 0.0
+    nd = effective_duration(newf, nd)
     new_tier = -best[0][0]
     accept = nd >= max(cur_d * 0.9, 60) and (
         (new_tier < cur_tier and (nh >= RESOLUTION_FLOOR or nh >= cur_h))
