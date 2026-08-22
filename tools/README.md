@@ -36,3 +36,15 @@ will leave that show's `poster.jpg` alone. Useful when:
   Vision 2026 art is captioned "14-16 August 2026" and belongs on all three
   nights, but kglw.net only files it against night one), or
 * kglw.net has an unrelated image filed as a show's poster-art.
+
+## Tour poster identity
+
+`unify_tour_posters.py` gives a whole tour one poster identity, varied by
+colorway per night, so a run does not visually restart part-way through.
+
+It only touches tours where at most a third of the shows have art of their own
+(`UNIQUE_LIMIT`). Tours where the band published genuine per-night variants -
+2025 Europe Residency, 2024 USA Tour - Fall, both 2023 tours - are left alone,
+because a hue rotation of one image would be strictly worse than the real
+thing. Shows marked `.poster_pinned` are skipped and count toward the tour's
+own-art share, so a pinned poster can keep a whole tour out of scope.
